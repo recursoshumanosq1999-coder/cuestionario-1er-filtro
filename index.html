@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1080">
+<title>Solicitud de empleo · MDreieck</title>
+<meta name="description" content="Formulario de primer filtro para candidatos de MDreieck.">
+<link rel="stylesheet" href="estilos.css">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+<header class="hdr" id="hdr">
+  <div class="hdr-row">
+    <div class="logo" id="brandLogo">MD</div>
+    <div class="htxt">
+      <h1>Solicitud de empleo</h1>
+      <div class="sub">MDreieck · Primer filtro</div>
+    </div>
+  </div>
+  <div class="prog" id="prog"></div>
+</header>
+
+<main class="wrap" id="main"></main>
+
+<nav class="navbar" id="navbar" hidden>
+  <div class="nav-inner"><div class="nav-sec" id="nav"></div></div>
+</nav>
+
+<div class="sending" id="sendOv">
+  <div class="send-box" id="sendBox">
+    <div class="spin"></div>
+    <div class="check-ic" id="checkIc">✓</div>
+    <h3 id="sendTitle">Procesando…</h3>
+    <p id="sendMsg">Un momento.</p>
+    <button class="btn btn-ghost btn-block" id="sendClose" style="margin-top:14px;display:none" onclick="ocultarOv()">Entendido</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="app.js"></script>
+<script>
+/* Quita la versión anterior de la app si quedó guardada en el teléfono */
+if('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{});
+
+let B = cargarBorrador() || nuevoBorrador();
+if(B.enviado) B = nuevoBorrador();
+const CV = { doc:null, fotos:[] };
+const ULT = PASOS.length;          // pasos 1..4 ; 0 = bienvenida
+let paso = 0;
+let docFinal = null;
+
+const $ = id => document.getElementById(id);
+const main = $('main');
+
+/* ---------- pantallas ---------- */
+function progreso(){
+  const p = $('prog');
+  if(paso < 1 || paso > ULT){ p.innerHTML=''; p.hidden=true; $('hdr').classList.add('plain'); return; }
+  p.hidden=false; $('hdr').classList.remove('plain');
+  p.innerHTML = PASOS.map((s,i)=>{
+    const n=i+1;
+    return `<div class="pstep ${n===paso?'on':(n<paso?'done':'')}" ${n<paso?`onclick="ir(${n})"`:''}>
+      <div class="pbar"></div><div class="plabel">${n}. ${s.nom}</div></div>`;
+  }).join('');
+}
+
+function bienvenida(){
+  const sigue = tieneDatos(B);
+  main.innerHTML = `
+  <section class="card hero">
+    <div class="hero-logo">${LOGO?`<img src="${LOGO}" alt="MDreieck">`:'<b>MDreieck</b>'}</div>
+    <h2 class="hero-t">¡Bienvenido(a) a MDreieck!</h2>
+    <p class="hero-p">Ayúdanos a completar el siguiente formulario para realizarte una entrevista formal.</p>
+    <ul class="hero-l">
+      <li><span>⏱️</span><div><b>Toma de 10 a 15 minutos.</b> Son 4 pasos cortos.</div></li>
+      <li><span>💡</span><div><b>Cada pregunta trae un ejemplo</b> de cómo responder. Si no aplica a tu caso, escribe "No aplica".</div></li>
+      <li><span>💼</span><div><b>Algunas preguntas dependen de la vacante.</b> Por ejemplo, si te postulas a Auxiliar técnico te preguntaremos por tu licencia de manejo; si no, esas preguntas no aparecen.</div></li>
+      <li><span>📄</span><div><b>Ten a la mano tu CV.</b> Puedes subir el archivo o, si lo tienes impreso, tomarle foto al final.</div></li>
+      <li><span>🔒</span><div>Tus respuestas se guardan en este teléfono mientras llenas el formulario. Si se cierra la página, puedes continuar después.</div></li>
+    </ul>
+    <button class="btn btn-primary btn-block" onclick="ir(${sigue?Math.max(1,B.paso||1):1})">${sigue?'Continuar donde me quedé ›':'Comenzar ›'}</button>
+    ${sigue?'<button class="link-test" onclick="reiniciar()">Empezar de nuevo</button>':''}
+  </section>`;
+}
+
+function htmlCV(){
+  return `<section class="card" id="cvCard">
+    <h2><span class="num ic">📄</span>Tu currículum (CV)</h2>
+    <p class="hint">Opcional, pero nos ayuda mucho a conocerte. Sube el archivo (PDF o Word) o, si lo tienes impreso, tómale una foto a cada hoja.</p>
+    <div class="cap-btns">
+      <label class="pill"><input type="file" accept="image/*" capture="environment" class="hidden-input" id="inCam">
+        <span class="p-ic">📷</span>Tomar foto</label>
+      <label class="pill"><input type="file" accept=".pdf,.doc,.docx,image/*" multiple class="hidden-input" id="inFile">
+        <span class="p-ic">📎</span>Subir archivo</label>
+    </div>
+    <div id="cvLista"></div>
+  </section>`;
+}
+function htmlFinal(){
+  const aviso = AVISO_URL ? `<a href="${esc(AVISO_URL)}" target="_blank" rel="noopener">aviso de privacidad</a>` : 'aviso de privacidad';
+  return `<section class="card">
+    <h2><span class="num ic">✅</span>Antes de enviar</h2>
+    <div id="faltan"></div>
+    <label class="consent"><input type="checkbox" id="acepto" ${B.acepto?'checked':''}>
+      <span>Confirmo que la información es verdadera. Conozco el ${aviso} y autorizo a ${esc(EMPRESA)} a usar mis datos personales, incluidos los de salud, solo para este proceso de reclutamiento. <b class="req">*</b></span></label>
+    <p class="ferr" id="errAcepto"></p>
+    <input type="text" id="hp" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true" value="">
+  </section>`;
+}
+
+function render(){
+  progreso();
+  const nav=$('navbar');
+  if(paso===0){ nav.hidden=true; bienvenida(); window.scrollTo(0,0); return; }
+  if(paso>ULT){ nav.hidden=true; return; }
+  let h = CARDS.filter(c=>c.paso===paso).map(c=>htmlCard(c,B.d)).join('');
+  if(paso===ULT) h += htmlCV() + htmlFinal();
+  main.innerHTML = h;
+  nav.hidden=false;
+  $('nav').innerHTML = `<button class="btn btn-ghost" onclick="ir(${paso-1})">‹ Atrás</button>` +
+    (paso<ULT ? `<button class="btn btn-primary" style="flex:1.6" onclick="siguiente()">Siguiente ›</button>`
+              : `<button class="btn btn-send" style="flex:1.6" id="sendBtn" onclick="enviar()">Enviar solicitud</button>`);
+  if(paso===ULT){ enlazarCV(); listaCV(); }
+  window.scrollTo(0,0);
+}
+function ir(p){
+  paso=Math.max(0,Math.min(ULT,p));
+  if(paso>=1){ B.paso=paso; guardarBorrador(B); }
+  render();
+}
+function reiniciar(){
+  if(!confirm('¿Borrar lo que llevas y empezar de nuevo?')) return;
+  borrarBorrador(); B=nuevoBorrador(); CV.doc=null; CV.fotos=[]; ir(0);
+}
+
+/* ---------- validación visible ---------- */
+function marcarErrores(lista){
+  main.querySelectorAll('.field.bad').forEach(f=>{ f.classList.remove('bad'); const e=f.querySelector('.ferr'); if(e) e.textContent=''; });
+  lista.forEach(({c,m})=>{
+    const f=main.querySelector('[data-k="'+c.k+'"]'); if(!f) return;
+    f.classList.add('bad'); const e=f.querySelector('.ferr'); if(e) e.textContent=m;
+  });
+  if(lista.length){
+    const f=main.querySelector('[data-k="'+lista[0].c.k+'"]');
+    if(f){ f.scrollIntoView({behavior:'smooth',block:'center'});
+      const i=f.querySelector('input,select,textarea'); if(i) setTimeout(()=>i.focus({preventScroll:true}),350); }
+  }
+}
+function siguiente(){
+  const errs=erroresPaso(paso,B.d);
+  if(errs.length){ marcarErrores(errs); return; }
+  ir(paso+1);
+}
+function limpiarError(k){
+  const f=main.querySelector('[data-k="'+k+'"]');
+  if(f && f.classList.contains('bad')){ f.classList.remove('bad'); const e=f.querySelector('.ferr'); if(e) e.textContent=''; }
+}
+
+/* ---------- captura ---------- */
+let tG=null;
+function guardar(){ clearTimeout(tG); tG=setTimeout(()=>guardarBorrador(B),300); }
+function condiciones(){
+  main.querySelectorAll('[data-card]').forEach(el=>{
+    const card=CARDS.find(c=>c.id===el.dataset.card); if(card) el.hidden=!cardVisible(card,B.d);
+  });
+  main.querySelectorAll('[data-k]').forEach(el=>{
+    const c=CAMPO[el.dataset.k]; if(!c) return;
+    el.hidden=!visible(c,B.d);
+    if(typeof c.l==='function'){ const q=el.querySelector('label.q'); if(q) q.innerHTML=esc(etiqueta(c,B.d))+(c.req?' <b class="req">*</b>':''); }
+  });
+}
+main.addEventListener('input',ev=>{
+  const t=ev.target, f=t.dataset&&t.dataset.f;
+  if(t.id==='hp'){ B.hp=t.value; return; }
+  if(!f) return;
+  if(t.dataset.i!=null){ const a=Array.isArray(B.d[f])?B.d[f].slice():[]; a[Number(t.dataset.i)]=t.value; B.d[f]=a; }
+  else B.d[f]=t.value;
+  limpiarError(f); condiciones(); guardar();
+});
+main.addEventListener('change',ev=>{
+  const t=ev.target;
+  if(t.tagName==='SELECT' && t.dataset.f){ B.d[t.dataset.f]=t.value; limpiarError(t.dataset.f); condiciones(); guardar(); }
+  if(t.id==='acepto'){ B.acepto=t.checked; $('errAcepto').textContent=''; guardar(); }
+});
+main.addEventListener('focusout',ev=>{   // valida formato al salir de la casilla
+  const f=ev.target.dataset&&ev.target.dataset.f; if(!f||ev.target.dataset.i!=null) return;
+  const c=CAMPO[f]; if(!c||vacio(B.d[f])) return;
+  const m=errorCampo(c,B.d); if(!m) return;
+  const el=main.querySelector('[data-k="'+f+'"]'); if(!el) return;
+  el.classList.add('bad'); const e=el.querySelector('.ferr'); if(e) e.textContent=m;
+});
+main.addEventListener('click',ev=>{
+  const b=ev.target.closest('button[data-f]'); if(!b) return;
+  const f=b.dataset.f, v=b.dataset.v;
+  B.d[f]=v;
+  b.parentElement.querySelectorAll('button').forEach(x=>{ const s=x.dataset.v===v; x.classList.toggle('sel',s); x.setAttribute('aria-checked',s); });
+  limpiarError(f); condiciones(); guardar();
+});
+
+/* ---------- CV ---------- */
+function enlazarCV(){
+  $('inCam').addEventListener('change',e=>agregarArchivos(e.target.files,e.target));
+  $('inFile').addEventListener('change',e=>agregarArchivos(e.target.files,e.target));
+}
+async function agregarArchivos(files,input){
+  const arr=[...(files||[])]; input.value='';
+  for(const f of arr){
+    const esImg=/^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name);
+    if(esImg){
+      if(CV.doc){ if(!confirm('Ya subiste un archivo. ¿Quitarlo y usar fotos en su lugar?')) return; CV.doc=null; }
+      if(CV.fotos.length>=CV_MAX_FOTOS){ alert('Máximo '+CV_MAX_FOTOS+' fotos.'); break; }
+      const r=await fotoReducida(f,1800,0.82);
+      if(!r){ alert('No se pudo leer la foto "'+f.name+'". Intenta tomarla de nuevo o súbela en formato JPG.'); continue; }
+      CV.fotos.push(r);
+    } else if(/\.(pdf|docx?)$/i.test(f.name)){
+      if(f.size>CV_MAX_MB*1048576){ alert('El archivo pesa '+fmtSize(f.size)+'. El máximo es '+CV_MAX_MB+' MB.'); continue; }
+      if(CV.fotos.length && !confirm('Ya tomaste fotos. ¿Quitarlas y usar este archivo?')) return;
+      CV.fotos=[]; CV.doc=f;
+    } else alert('Formato no permitido: '+f.name+'. Usa PDF, Word o una foto.');
+  }
+  listaCV();
+}
+function listaCV(){
+  const el=$('cvLista'); if(!el) return;
+  if(CV.doc){
+    el.innerHTML=`<div class="cv-doc"><span class="cv-ic">📄</span><div class="cv-n"><b>${esc(CV.doc.name)}</b><small>${fmtSize(CV.doc.size)}</small></div>
+      <button class="p-del" onclick="CV.doc=null;listaCV()" aria-label="Quitar">✕</button></div>`;
+  } else if(CV.fotos.length){
+    el.innerHTML=`<div class="cv-fotos">${CV.fotos.map((f,i)=>`<div class="cv-f"><img src="${f.url}" alt="Hoja ${i+1}">
+      <span>Hoja ${i+1}</span><button class="medio-del" onclick="CV.fotos.splice(${i},1);listaCV()" aria-label="Quitar">✕</button></div>`).join('')}</div>
+      <p class="ayuda" style="margin-top:8px">${CV.fotos.length<CV_MAX_FOTOS?'¿Tu CV tiene más hojas? Toca "Tomar foto" otra vez.':''} Se unirán en un solo PDF.</p>`;
+  } else el.innerHTML='<p class="sin-medios">Aún no has agregado tu CV.</p>';
+}
+
+/* ---------- envío ---------- */
+function ov(t,m,estado){
+  const box=$('sendBox'); box.classList.toggle('done',!!estado);
+  const ic=$('checkIc'); ic.textContent=estado==='err'?'⚠️':'✓'; ic.style.color=estado==='err'?'#c62828':'#1f9d55';
+  $('sendTitle').textContent=t; $('sendMsg').textContent=m;
+  $('sendClose').style.display = estado==='err' ? 'flex' : 'none';
+  $('sendOv').classList.add('on');
+}
+function ocultarOv(){ $('sendOv').classList.remove('on'); }
+
+async function enviar(){
+  for(let p=1;p<=ULT;p++){
+    const errs=erroresPaso(p,B.d);
+    if(errs.length){
+      if(p!==paso) ir(p);
+      setTimeout(()=>marcarErrores(errs),50);
+      if(p!==paso) alert('Falta información en el paso '+p+' ('+PASOS[p-1].nom+'). Te llevamos ahí.');
+      return;
+    }
+  }
+  if(!B.acepto){ $('errAcepto').textContent='Necesitamos tu autorización para poder recibir tu solicitud.';
+    $('acepto').closest('.card').scrollIntoView({behavior:'smooth',block:'center'}); return; }
+  if(!online()){ alert('No tienes conexión a internet. Tus respuestas siguen guardadas; intenta de nuevo cuando tengas señal.'); return; }
+  if(!CONFIGURADO){ alert('El formulario aún no está conectado (falta la URL del Apps Script en app.js).'); return; }
+  const btn=$('sendBtn'); btn.disabled=true;
+  try{
+    docFinal = await enviarSolicitud(B,CV,ov);
+    B.enviado=true; guardarBorrador(B);
+    ocultarOv(); gracias();
+    borrarBorrador();
+  }catch(err){
+    btn.disabled=false;
+    ov('No se pudo enviar', 'Tus respuestas siguen guardadas. Revisa tu conexión e inténtalo de nuevo.' + (err&&err.message?' ('+err.message+')':''), 'err');
+  }
+}
+function gracias(){
+  paso=ULT+1; progreso(); $('navbar').hidden=true;
+  main.innerHTML=`<section class="card hero">
+    <div class="ok-ic">✓</div>
+    <h2 class="hero-t">¡Gracias, ${esc((B.d.nombre||'').split(' ')[0])}!</h2>
+    <p class="hero-p">Recibimos tu solicitud para <b>${esc(puestoFinal(B.d))}</b>.</p>
+    <div class="folio-prev" style="font-size:18px">Tu folio: ${esc(B.folio)}</div>
+    <p class="hero-p">Guárdalo por si necesitas comunicarte con nosotros. El equipo de Recursos Humanos revisará tu información y, si tu perfil avanza, te contactaremos por teléfono o WhatsApp para agendar tu entrevista.</p>
+    <button class="btn btn-ghost btn-block" onclick="docFinal&&docFinal.save(nombrePDF(B))">📄 Descargar copia de mis respuestas</button>
+  </section>`;
+  window.scrollTo(0,0);
+}
+
+if(LOGO) $('brandLogo').innerHTML='<img src="'+LOGO+'" alt="MD">';
+window.addEventListener('pagehide',()=>{ if(!B.enviado) guardarBorrador(B); });
+render();
+</script>
+</body>
+</html>
